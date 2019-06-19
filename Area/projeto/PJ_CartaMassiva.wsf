@@ -1,0 +1,217 @@
+<?XML version="2.0" standalone="yes" encoding="iso-8859-1" ?>
+<package>
+	<job id="Modelo">
+		<?job debug="false"?>
+		<runtime>
+			<description>Scripts Automação Modelo</description>
+		</runtime>
+		<script language="JScript" src="PJ_CartaMassiva.js"/>
+		<script language="JScript" src="..\..\bin\AutoIt_Functions.js"/>
+		<script language="JScript" src="..\..\bin\IEUtils_Modelo.js"/>
+		<script language="JScript" src="..\..\bin\Utils_Modelo_RPA.js"/>
+		<script language="JScript" src="..\..\bin\Excel_Functions.js"/>
+		<script language="JScript" src="..\..\bin\STMRun.js"/>
+		<script language="JScript">
+		<![CDATA[
+
+		/****************************************************************************/
+		/***************************** FUNCOES GERAIS *******************************/
+		/****************************************************************************/
+		function ConsultaDados()
+		{
+			var tm_total = new Timer();		
+
+			if( !fso.FileExists( planilha ) ) throw new Error( 777, "Planilha ainda não disponível na rede" );
+				
+			//Cria objeto do Excel
+			var xlsObject = WScript.CreateObject("Excel.Application");
+			xlsObject.Visible = false;
+			var xls = xlsObject.Workbooks.Open( planilha );
+			xls.Application.DisplayAlerts = false;
+			var cells = xls.WorkSheets(1).Cells;
+
+			var repetido = false;
+			var cnpjRepetido = false;
+			var cpfRepetido = false;
+			var contadorEmpresas = 0;
+			var contadorUsuarios = 0;
+
+			for( var c = 2; cells( c, 1 ).Value != "" && cells( c, 1 ).Value != undefined; c++ )
+			{
+				try
+				{
+					AutoIt.ToolTip( "Consultando base: " + operacoes.length + " registro(s) coletado(s)." , 10, 10 );
+
+					if( cells( c, 7 ).Value != undefined && cells( c, 7 ).Value != "" ) continue;
+
+					if( !repetido )
+					{			
+						operacoes.push({
+							"Contrato": cells( c, 2 ).Value,
+							"Empresas": [],
+							"Observacao": "",
+							"Status": ""
+						});
+
+						contadorEmpresas = 0;
+						contadorUsuarios = 0;                	
+					}					
+	
+					indice = operacoes.length - 1;
+
+					AutoIt.ToolTip( "Consultando base: " + operacoes.length + " registro(s) coletado(s). Contrato: " + operacoes[indice].Contrato + " - Empresa(s):  " + contadorEmpresas + " / Usuário(s): " + contadorUsuarios , 10, 10 );
+
+					if( !cnpjRepetido || !repetido ){
+						operacoes[indice].Empresas.push({ 
+							"CNPJ": "000" + cells( c, 3 ).Value, 
+							"Nome": cells( c, 4 ).Value.toUpperCase(),
+							"Usuarios": []
+						});
+
+						contadorEmpresas += 1;
+					}
+
+					cells( c, 7 ).Value = "Processado";
+
+					indiceCNPJ = operacoes[indice].Empresas.length - 1;
+					cpfRepetido = false;
+
+					//Valida se o CPF já está no Json
+					for( var e = 0; e < operacoes[indice].Empresas[indiceCNPJ].Usuarios.length; e++ ){
+						if( operacoes[indice].Empresas[indiceCNPJ].Usuarios[e].CPF == cells( c, 6 ).Value ){
+							cpfRepetido = true;
+							break;
+						}
+					}
+
+					if( !cpfRepetido ){
+						operacoes[indice].Empresas[indiceCNPJ].Usuarios.push({
+							"Nome": cells( c, 5 ).Value.toUpperCase(),
+							"CPF": "000" + cells( c, 6 ).Value,
+							"Escrito": false,
+							"Linha": cells( c, 5 ).row,
+							"Observacao": "",
+							"Status": ""
+						})
+
+						contadorUsuarios += 1;
+					}				
+
+					repetido = ( cells( c + 1, 2 ).Value == operacoes[indice].Contrato ) ? true : false;
+					cnpjRepetido = ( operacoes[indice].Empresas[indiceCNPJ].CNPJ.indexOf( cells( c + 1, 3 ).Value ) >= 0 ) ? true : false;
+
+					//if( !repetido && operacoes.length == qtdeMassa ) break;
+				}
+				catch(e){
+					throw new Error( 123, "Erro ao ler a base: " + e.message );
+				}
+			}
+			
+			xls.Save();
+			xls.close();
+			ss_kill("EXCEL");
+
+			if( operacoes.length == 0 ) throw new Error( 777, "Não há dados para serem processados." );		
+
+			return tm_total.elapsed();		
+		}
+		function EscreveResultado( obj )
+		{
+			//Cria objeto do Excel
+			var xlsObject = WScript.CreateObject("Excel.Application");
+			xlsObject.Visible = false;
+			var xls = xlsObject.Workbooks.Open( planilha );
+			xls.Application.DisplayAlerts = false;
+			var cells = xls.WorkSheets(1).Cells;
+
+			for( var l = 0; l < obj.Empresas.length; l++ )
+			{ 
+				for( var m = 0; m < obj.Empresas[l].Usuarios.length; m++ )
+				{
+					cells( obj.Empresas[l].Usuarios[m].Linha, 7 ).Value = obj.Status;
+					cells( obj.Empresas[l].Usuarios[m].Linha, 8 ).Value = obj.Observacao;
+				}
+			}
+			
+			xls.Save();
+			xls.close();
+			ss_kill("EXCEL");
+		}
+		function EscreveLog( obj )
+		{
+			var txt = ReadAllTextFile( file_processados );
+			var csv_results = "";
+			var csvProcessado = fso.OpenTextFile( file_processados, ForAppending, true );
+			var cabecalho = "Contrato;Observacao;Status\r\n";
+			
+			csv_results += obj.Contrato + ";" +
+					obj.Observacao + ";" +
+					obj.Status;
+			
+			if( txt == "" ) csvProcessado.WriteLine( cabecalho + csv_results );
+			else csvProcessado.WriteLine( csv_results );			
+			csvProcessado.Close();
+		}
+		/****************************************************************************/
+		/*********************** INICIO DO CODIGO SCRIPT ****************************/
+		/****************************************************************************/
+
+		ss_kill("iexplore");
+		ss_kill("EXCEL");
+		ss_kill("WINWORD");
+
+		var operacoes = new Array();
+		var data = new Date();
+		var sistema = WshSysEnv("Sistema");
+		var qtdeMassa = WshSysEnv("QtdeMassa");
+	
+		var AutoIt = new ActiveXObject( "AutoItX3.Control" );
+		AutoIt.AutoItSetOption ( "MouseCoordMode",    0 );
+		AutoIt.AutoItSetOption ( "PixelCoordMode",    0 );
+		AutoIt.AutoItSetOption ( "ColorMode",         0 );
+		AutoIt.AutoItSetOption ( "WinTitleMatchMode", 2 );
+		//AutoIt.AutoItSetOption ( "SendKeyDelay"	 , 50  );
+
+		var path = WshShell.currentDirectory + "\\robo\\PJ_Carta_Massiva\\";
+		var pathRede = "\\\\pasta_01\\pasta_02\\Contratos com Tokens Ativos\\Cartas\\"
+		var pathRedeDia = pathRede + data.format("yyyymmdd") + "\\";
+		var path_processados = path + "Processados\\";
+		var path_arquivos = path + "Arquivos\\";
+		var pathArquivosDia = path_arquivos + data.format("dd_mm_yyyy") + "\\";
+
+		var file_processados = path_processados + data.format("dd_mm_yyyy_HH_MM") + ".csv";
+		var file_log = data.format("dd_mm_yyyy_HH_MM");		
+		var planilha = path + "Base.xlsx";
+		var fileModelo = path + "Habilitacao Massiva_Modelo.doc";
+		
+		var ForReading = 1, ForWriting = 2, ForAppending = 8;
+		var fso = new ActiveXObject("Scripting.FileSystemObject");
+
+		//Variáveis para controle de execução dos robôs
+		var continueProcess = true;
+		var countAccessError = 0, msgAccessError = "";		
+
+		//Verifica os acessos aos diretórios
+		//try{ fso.GetFolder(path_rede); }
+		//catch(e){ countAccessError++; msgAccessError += "Falha ao acessar o diretório: " + path_rede + "\r\n"; }
+
+		//if(countAccessError < 1) continueProcess = true;
+
+		//Cria pastas do dia
+		if( !fso.FolderExists( path_processados ) ) fso.CreateFolder( path_processados );
+		if( !fso.FolderExists( path_arquivos ) ) fso.CreateFolder( path_arquivos );
+		if( !fso.FolderExists( pathArquivosDia ) ) fso.CreateFolder( pathArquivosDia );
+		//if( !fso.FolderExists( pathRede ) ) fso.CreateFolder( pathRede );
+
+		//Executa o robo
+		runSTM();
+
+		ss_kill("iexplore");
+		ss_kill("EXCEL");
+		ss_kill("WINWORD");
+
+		WScript.Quit();
+		]]>
+		</script>
+	</job>
+</package>
